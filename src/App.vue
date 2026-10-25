@@ -3,10 +3,11 @@ import { Nav, Alert } from '@/components';
 import { LoginModal } from '@/components/modals';
 import { useAuthStore } from '@/stores';
 import Footer from '@/components/Footer.vue';
-import { RouterView } from 'vue-router';
+import { RouterView, useRoute } from 'vue-router';
 import '@fortawesome/fontawesome-free/css/all.css'
 
 const auth = useAuthStore();
+const route = useRoute();
 // The stored user is a login-time snapshot; pick up the current role (e.g. Administrator).
 auth.refreshRole();
 </script>
@@ -19,7 +20,7 @@ auth.refreshRole();
         <div class="container px-0 pb-4 md:px-4 md:pt-4 pt-[5px]">
             <RouterView />
         </div>
-        <Footer />
+        <Footer v-if="!route.meta.hideFooter" />
     </div>
 </template>
 

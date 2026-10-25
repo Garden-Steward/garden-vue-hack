@@ -7,6 +7,8 @@ import { PublicHomeView, HomeView, LoginView, GardenManage, GardenPublic, Garden
 import { EventEditor, TaskMessages } from '@/views/admin';
 import GoogleOAuth from './oauth-google-callback/oauth-google-callback.vue'
 
+const ExploreView = () => import('@/views/ExploreView.vue');
+
 export const router = createRouter({
     history: createWebHistory(import.meta.env.BASE_URL),
     linkActiveClass: 'active',
@@ -55,6 +57,20 @@ export const router = createRouter({
         {
             path: '/map',
             component: MapView
+        },
+        // Explore pulls in three.js, so it loads on demand. It fills the
+        // screen under the nav, so there's no footer.
+        {
+            path: '/explore',
+            component: ExploreView,
+            name: 'explore',
+            meta: { hideFooter: true }
+        },
+        {
+            path: '/explore/:slug',
+            component: ExploreView,
+            name: 'explore-garden',
+            meta: { hideFooter: true }
         },
         {
             path: '/contribute',

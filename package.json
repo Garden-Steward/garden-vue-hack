@@ -42,6 +42,7 @@
         "markdown-it": "^14.3.3",
         "markdown-it-attrs": "^4.1.6",
         "pinia": "^2.0.13",
+        "three": "^0.170.0",
         "tiptap-markdown": "^0.8.10",
         "vcards-js": "^2.10.0",
         "vee-validate": "^4.5.11",
