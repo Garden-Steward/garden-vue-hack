@@ -16,7 +16,9 @@ import ExploreEventForm from '@/explore/ExploreEventForm.vue';
 import ExploreTaskForm from '@/explore/ExploreTaskForm.vue';
 import ExploreTaskRow from '@/explore/ExploreTaskRow.vue';
 import ExplorePlotEditor from '@/explore/ExplorePlotEditor.vue';
+import ExploreVolunteerView from '@/explore/ExploreVolunteerView.vue';
 import { repeatSummary } from '@/explore/repeat';
+import { pickView } from '@/explore/volunteer';
 
 // Explore: find a garden on the map, then walk around it as a floating
 // low-poly island where each plot grows one of the plants logged nearby.
@@ -605,16 +607,33 @@ function createViewer() {
         onSelect: (i) => openPanel(i),
         onDeselect: () => closePanel(false)
     });
-    const updateInset = () => {
-        const sheet = sheetEl.value;
-        const stage = stageEl.value;
-        if (!sheet || !stage || !viewer) return;
-        const phone = stage.clientWidth <= 640;
-        viewer.setInset(phone ? { left: 0, bottom: Math.min(sheet.offsetHeight, stage.clientHeight * 0.45) } : { left: sheet.offsetWidth + 24, bottom: 0 });
-    };
+    observeInset();
+}
+
+// The surface the island must stay clear of: the manager's sheet (left on
+// desktop, bottom on phones) or the volunteer tray/sheet (always bottom).
+const insetEl = () => (view.value === 'manage' ? sheetEl.value : volunteerEl.value?.insetEl) || null;
+function updateInset() {
+    const stage = stageEl.value;
+    if (!stage || !viewer) return;
+    const el = insetEl();
+    if (!el) {
+        viewer.setInset({ left: 0, bottom: 0 });
+        return;
+    }
+    const phone = stage.clientWidth <= 640;
+    const bottom = Math.min(el.offsetHeight, stage.clientHeight * 0.45);
+    if (view.value === 'manage' && !phone) viewer.setInset({ left: el.offsetWidth + 24, bottom: 0 });
+    else viewer.setInset({ left: 0, bottom });
+}
+function observeInset() {
+    sheetObserver?.disconnect();
+    sheetObserver = null;
+    if (!viewer || !stageEl.value) return;
     if (typeof ResizeObserver !== 'undefined') {
         sheetObserver = new ResizeObserver(updateInset);
-        if (sheetEl.value) sheetObserver.observe(sheetEl.value);
+        const el = insetEl();
+        if (el) sheetObserver.observe(el);
         sheetObserver.observe(stageEl.value);
     }
     updateInset();
@@ -656,6 +675,16 @@ const laterEvents = computed(() => gardenEvents.value.filter(e => e !== nextEven
 // ── Managers edit workdays and tasks right on the sheet ──
 // Same rule as the manage page: you manage a garden if you're one of its managers.
 const isManager = computed(() => !!(user.value && current.value?.managerIds.includes(user.value.id)));
+// Managers land on the workbench (the sectioned sheet) and can preview the
+// volunteer view; everyone else only ever sees the volunteer view.
+const viewOverride = ref(null); // 'volunteer' | 'manage' | null
+const view = computed(() => pickView({ isManager: isManager.value, override: viewOverride.value }));
+const volunteerEl = ref(null);
+// Switching views swaps the surface the island stays clear of, so watch the new one.
+watch([view, () => volunteerEl.value?.insetEl], async () => {
+    await nextTick();
+    observeInset();
+}, { flush: 'post' });
 const editing = ref(null); // { kind: 'event' | 'task', item: the row being edited, or null for a new one }
 
 const editEvent = (item = null) => {
@@ -732,6 +761,7 @@ watch(slug, () => {
     editing.value = null;
     openTaskId.value = null;
     sectionOverrides.value = {};
+    viewOverride.value = null;
 });
 
 // Same flow as the garden page: signed-in people RSVP directly, everyone else gives a phone number.
@@ -875,9 +905,12 @@ const lastSearch = { query: '', status: '', place: null };
         <template v-else-if="mode === 'garden'">
             <div ref="stageEl" class="explore-island"></div>
 
-            <section ref="sheetEl" class="explore-sheet" aria-labelledby="explore-garden-title">
+            <section v-if="view === 'manage'" ref="sheetEl" class="explore-sheet" aria-labelledby="explore-garden-title">
                 <header class="explore-sheet__header">
-                    <router-link to="/explore" class="explore-sheet__back">← Map</router-link>
+                    <div class="explore-sheet__top">
+                        <router-link to="/explore" class="explore-sheet__back">← Map</router-link>
+                        <button type="button" class="explore-sheet__preview" @click="viewOverride = 'volunteer'">View as volunteer</button>
+                    </div>
                     <h2 id="explore-garden-title">{{ current.title }}</h2>
                     <p v-if="current.blurb" class="explore-sheet__blurb">{{ current.blurb }}</p>
                     <div v-if="hostsOf(current.slug).length" class="explore-hosts">
@@ -1106,6 +1139,44 @@ const lastSearch = { query: '', status: '', place: null };
                     </footer>
                 </div>
             </section>
+
+            <ExploreVolunteerView
+                v-else
+                ref="volunteerEl"
+                :garden-slug="current.slug"
+                :next-event="nextEvent"
+                :later-events="laterEvents"
+                :event-count="gardenEvents.length"
+                :tasks="gardenTasks.filter(ACTIVE_TASK)"
+                :rsvped="nextEventRsvped"
+                :rsvp-busy="rsvpBusy"
+                :can-manage="isManager"
+                @rsvp="rsvpNextEvent"
+                @manage="viewOverride = 'manage'"
+                @signed-up="onSignedUp"
+            >
+                <template #header>
+                    <router-link to="/explore" class="explore-sheet__back">← Map</router-link>
+                    <h2 id="explore-garden-title" class="explore-sheet__title">{{ current.title }}</h2>
+                    <p v-if="current.blurb" class="explore-sheet__blurb">{{ current.blurb }}</p>
+                    <div v-if="hostsOf(current.slug).length" class="explore-hosts">
+                        <span class="explore-hosts__faces">
+                            <span
+                                v-for="h in hostsOf(current.slug).slice(0, 4)"
+                                :key="h.id"
+                                class="explore-hosts__face"
+                                :style="avatarStyle(h)"
+                                :title="hostName(h)"
+                                aria-hidden="true"
+                            >{{ initials(h) }}</span>
+                        </span>
+                        <span>{{ hostLine(current) }}</span>
+                    </div>
+                    <p v-else-if="current.managerIds.length" class="explore-hosts">
+                        Looked after by {{ plural(current.managerIds.length, 'garden manager') }}
+                    </p>
+                </template>
+            </ExploreVolunteerView>
 
             <aside
                 class="explore-panel"
@@ -1569,12 +1640,35 @@ const lastSearch = { query: '', status: '', place: null };
     background: var(--ex-sunken);
     color: var(--ex-fg);
 }
-.explore-sheet__header h2 {
+.explore-sheet__header h2,
+.explore-sheet__title {
     margin: 0;
     font-size: var(--ex-t-title);
     font-weight: 700;
     line-height: 1.2;
     text-wrap: balance;
+}
+.explore-sheet__top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+/* Managers: see the garden the way volunteers do */
+.explore-sheet__preview {
+    margin: -4px -4px 0 0;
+    padding: 3px 10px;
+    border: 1.5px solid var(--ex-accent);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ex-accent);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+}
+.explore-sheet__preview:hover {
+    background: var(--ex-sunken);
 }
 .explore-sheet__blurb {
     margin: 0;
