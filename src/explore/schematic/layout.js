@@ -49,7 +49,8 @@ function resolveOptions(options) {
 }
 
 /** Default rectangle (metres, centred on the origin) with a long axis along x. */
-function defaultRing(n, opts) {
+function defaultRing(count, opts) {
+  const n = Math.max(count, 4); // an empty garden still shows a plausible plot
   const sides = opts.path === 'centre' ? 2 : 1;
   const r = opts.rows ?? Math.max(1, Math.round(Math.sqrt(n / 2)));
   const c = Math.max(1, Math.ceil(n / (sides * r)));
@@ -187,7 +188,11 @@ function buildPiece(ring, bedsHere, opts) {
 
   const ia = Math.max(L / 2 - MARGIN - TREE_R, 0);
   const ib = Math.max(D / 2 - MARGIN - TREE_R, 0);
-  const corners = [[-ia, -ib], [ia, -ib], [ia, ib], [-ia, ib]].map(([a, b]) => toWorld(a, b));
+  // Too small for the inset corners to be distinct: no trees on this piece.
+  const roomy = L / 2 > MARGIN + TREE_R && D / 2 > MARGIN + TREE_R;
+  const corners = roomy
+    ? [[-ia, -ib], [ia, -ib], [ia, ib], [-ia, ib]].map(([a, b]) => toWorld(a, b))
+    : null;
 
   return {
     ring,
@@ -305,9 +310,10 @@ export function layoutSchematic({ pieces, beds, options, stage, seed } = {}) {
 
   const start = hash(seed) % 4;
   const trees = [];
-  for (let i = 0; i < opts.trees; i++) {
-    const P = built.length;
-    const [x, y] = toPx(built[i % P].corners[(start + Math.floor(i / P)) % 4]);
+  const treePieces = built.filter((p) => p.corners);
+  for (let i = 0; i < opts.trees && treePieces.length; i++) {
+    const P = treePieces.length;
+    const [x, y] = toPx(treePieces[i % P].corners[(start + Math.floor(i / P)) % 4]);
     trees.push({ x, y, r: TREE_R * scale });
   }
 

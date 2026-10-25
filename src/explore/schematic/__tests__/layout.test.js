@@ -27,6 +27,18 @@ describe('layoutSchematic', () => {
     for (const b of L.beds) { expect(b.x).toBeGreaterThan(minX); expect(b.x).toBeLessThan(maxX); }
     expect(L.notToScale).toBe(false);
   });
+  test('a piece too small for inset corners gets no trees', () => {
+    const tiny = { ring: [[-3, -3], [3, -3], [3, 3], [-3, 3]], area_m2: 36 };
+    const L = layoutSchematic({ pieces: [tiny], beds: [], options: {}, stage, seed: 'x' });
+    expect(L.trees).toHaveLength(0);
+  });
+  test('default rectangle for 0 beds is as wide as for 4 beds', () => {
+    const width = (beds) => {
+      const xs = layoutSchematic({ pieces: [], beds, options: {}, stage, seed: 'x' }).pieces[0].points.map(p => p[0]);
+      return Math.max(...xs) - Math.min(...xs);
+    };
+    expect(width([])).toBeCloseTo(width([0, 1, 2, 3].map(i => bed(i))), 6);
+  });
   test('no pieces: a default rectangle sized to the beds', () => {
     const L = layoutSchematic({ pieces: [], beds: [bed(0), bed(1)], options: {}, stage, seed: 'x' });
     expect(L.pieces).toHaveLength(1);

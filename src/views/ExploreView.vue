@@ -17,8 +17,8 @@ import ExploreTaskRow from '@/explore/ExploreTaskRow.vue';
 import ExplorePlotEditor from '@/explore/ExplorePlotEditor.vue';
 import { repeatSummary } from '@/explore/repeat';
 
-// Explore: find a garden on the map, then walk around it as a floating
-// low-poly island where each plot grows one of the plants logged nearby.
+// Explore: find a garden on the map, then open its flat SVG schematic
+// where each bed shows one of the plants logged nearby.
 // Ported from the garden-discover prototype; data comes from Strapi.
 
 const PLANT_RADIUS_KM = 0.5; // same radius as the garden Plants tab
@@ -237,7 +237,7 @@ function loadHosts(slug) {
     return request;
 }
 
-/** Hosts for the cards and the island, once events are in (the fallback needs them). */
+/** Hosts for the cards and the schematic, once events are in (the fallback needs them). */
 watch([exploreGardens, events, eventsLoading], () => {
     if (eventsLoading.value) return;
     exploreGardens.value.forEach(g => loadHosts(g.slug));
@@ -551,6 +551,7 @@ async function loadPlots(gardenSlug) {
     // A failure (or a backend without plots yet) reads as "no saved layout": the schematic shows logged plants.
     const res = await fetchWrapper.get(`${import.meta.env.VITE_API_URL}/api/gardens/${gardenSlug}/plots`).catch(() => null);
     const plots = res?.data?.meta?.saved ? res.data.plots || [] : [];
+    selected.value = null;
     savedPlots.value = { ...savedPlots.value, [gardenSlug]: { plots, schematic: res?.data?.schematic ?? null } };
 }
 
@@ -578,6 +579,7 @@ function onPlotsSaved(payload) {
         ? { plots: payload, schematic: savedPlots.value[slugNow]?.schematic ?? null }
         : payload;
     savedPlots.value = { ...savedPlots.value, [slugNow]: next };
+    selected.value = null;
     editingPlots.value = false;
 }
 
@@ -603,7 +605,7 @@ function closePanel() {
     returnFocus = null;
 }
 
-// ── Workdays and tasks on the island sheet ──
+// ── Workdays and tasks on the schematic sheet ──
 const gardenEvents = computed(() => current.value ? activityOf(current.value.slug).events : []);
 // The next workday that's still on gets the big card and RSVP; canceled ones list under it, tagged.
 const nextEvent = computed(() => gardenEvents.value.find(e => !e.canceled) || null);
@@ -622,6 +624,7 @@ const editTask = (item = null) => {
     openSection('tasks');
 };
 const editPlots = () => {
+    selected.value = null;
     editingPlots.value = true;
     openSection('plots');
 };
@@ -710,8 +713,7 @@ async function rsvpNextEvent() {
 }
 
 function pickPlant(i, e) {
-    returnFocus = e?.currentTarget ?? null;
-    selected.value = i;
+    openPanel(i, e?.currentTarget);
 }
 
 // ── Lifecycle ──
@@ -723,14 +725,10 @@ const mode = computed(() => {
 
 watch([mode, slug, user], async () => {
     await nextTick();
+    selected.value = null;
     if (mode.value === 'map') {
-        selected.value = null;
         createMap();
-    } else if (mode.value === 'garden') {
-        selected.value = null;
-        destroyMap();
     } else {
-        selected.value = null;
         destroyMap();
     }
 }, { flush: 'post' });
@@ -1062,7 +1060,7 @@ const lastSearch = { query: '', status: '', place: null };
                     </section>
 
                     <footer class="explore-sheet__footer">
-                        <p class="explore-sheet__hint">Drag to orbit · scroll or pinch to zoom · tap a plot</p>
+                        <p class="explore-sheet__hint">Drag to pan · scroll or pinch to zoom · tap a bed</p>
                         <router-link :to="{ name: 'garden-public', params: { slug: current.slug } }" class="explore-link">
                             Visit the garden page →
                         </router-link>
