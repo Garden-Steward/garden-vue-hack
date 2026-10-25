@@ -84,7 +84,8 @@ function localPoint(event) {
 
 function onWheel(event) {
   const [px, py] = localPoint(event);
-  zoomAbout(px, py, Math.exp(-event.deltaY * 0.001));
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? box.value.height : 1;
+  zoomAbout(px, py, Math.exp(-event.deltaY * unit * 0.001));
 }
 
 const pointers = new Map();
@@ -105,8 +106,8 @@ function onPointerDown(event) {
   } else if (pointers.size === 2) {
     pinchDist = pinchDistance();
     dragged = true;
+    for (const id of pointers.keys()) event.currentTarget.setPointerCapture?.(id);
   }
-  event.currentTarget.setPointerCapture?.(event.pointerId);
 }
 
 function onPointerMove(event) {
@@ -116,7 +117,10 @@ function onPointerMove(event) {
   pointers.set(event.pointerId, cur);
   if (pointers.size === 1) {
     moved += Math.hypot(cur.x - prev.x, cur.y - prev.y);
-    if (moved > DRAG_PX) dragged = true;
+    if (moved > DRAG_PX && !dragged) {
+      dragged = true;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    }
     if (dragged) {
       view.value = {
         ...view.value,
@@ -138,7 +142,9 @@ function onPointerMove(event) {
 function onPointerEnd(event) {
   pointers.delete(event.pointerId);
   if (pointers.size === 1) pinchDist = 0;
-  event.currentTarget.releasePointerCapture?.(event.pointerId);
+  if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }
 }
 
 /** True (and clears the flag) when this click is the tail of a drag. */
