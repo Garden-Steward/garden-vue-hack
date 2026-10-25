@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { makeRand } from './rand';
 
-// Matches the Strapi `plant.type` enum.
-export const PLANT_TYPES = ['annual', 'perennial', 'herb', 'tree', 'shrub', 'wildflower', 'fungi'];
+import { PLANT_TYPES, archetypeOf } from '@/explore/schematic/archetype';
+
+export { PLANT_TYPES, archetypeOf };
 
 export const DEFAULT_COLORS = {
   annual: '#d9443a',
@@ -115,9 +116,6 @@ const builders = {
     }
   },
 };
-
-/** Strapi plants can have no type; draw those as an annual. */
-export const archetypeOf = (type) => (PLANT_TYPES.includes(type) ? type : 'annual');
 
 /** One low-poly plant for a plot, base at y = 0, varied deterministically by `seed`. */
 export function buildPlant(plant, seed) {
