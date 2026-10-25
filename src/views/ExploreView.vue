@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { useAuthStore, useEventStore } from '@/stores';
+import { useAuthStore, useEventStore, useGardenTaskStore } from '@/stores';
 import { fetchWrapper } from '@/helpers';
 import { RsvpPhoneModal } from '@/components/modals';
 import { approximateCenter, APPROX_AREA_RADIUS_M } from '@/helpers/location-privacy';
@@ -19,6 +19,8 @@ import ExplorePlotEditor from '@/explore/ExplorePlotEditor.vue';
 import ExploreVolunteerView from '@/explore/ExploreVolunteerView.vue';
 import { repeatSummary } from '@/explore/repeat';
 import { pickView } from '@/explore/volunteer';
+import { computeHealth } from '@/explore/health';
+import { volunteersOf } from '@/explore/people';
 
 // Explore: find a garden on the map, then walk around it as a floating
 // low-poly island where each plot grows one of the plants logged nearby.
@@ -45,13 +47,15 @@ const ISLE_SVG = `<svg viewBox="0 0 48 44" aria-hidden="true">
 <circle cx="18.5" cy="8.5" r="3" fill="#4f8a3c"/><circle cx="29.5" cy="8" r="3.4" fill="#5e9a45"/><circle cx="31" cy="6.5" r="1.1" fill="#d9443a"/>
 </svg>`;
 
-// Same rule as the public tasks page: only tasks that are ready or under way.
-const ACTIVE_TASK = (t) => ['INITIALIZED', 'IN_PROGRESS'].includes(String(t.task_status || '').toUpperCase());
+// Tasks that are ready or under way. A started task keeps its open spots and its
+// volunteers on show; it only leaves the page once it's finished.
+const ACTIVE_TASK = (t) => ['INITIALIZED', 'IN_PROGRESS', 'STARTED'].includes(String(t.task_status || '').toUpperCase());
 
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const eventStore = useEventStore();
+const taskStore = useGardenTaskStore();
 const { user } = storeToRefs(authStore);
 const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
@@ -118,14 +122,45 @@ async function loadEvents() {
     eventsLoading.value = false;
 }
 
+// Names and avatar colours only; the server hands signed-out visitors ids alone.
+const PEOPLE_FIELDS = (rel) => ['id', 'firstName', 'lastName', 'color'].map((f, i) => `populate[${rel}][fields][${i}]=${f}`).join('&');
+
+// A backend without the reserve list yet rejects the `reserves` populate; the page then does without it.
+let tasksHaveReserves = true;
 async function loadTasks() {
+    const open = '&filters[$or][0][task_status][$ne]=FINISHED&filters[$or][1][task_status][$null]=true';
+    const base = `${PEOPLE_FIELDS('volunteers')}&populate[garden][fields][0]=slug&populate[recurring_task][fields][0]=id`;
     try {
-        // Only volunteer ids and the garden slug: a bare populate would ship whole user records.
-        const query = 'populate[volunteers][fields][0]=id&populate[garden][fields][0]=slug'
-            + '&filters[$or][0][task_status][$ne]=FINISHED&filters[$or][1][task_status][$null]=true';
-        allTasks.value = (await fetchAllPages('/api/garden-tasks', query)).filter(t => t?.garden?.slug);
+        if (tasksHaveReserves) {
+            try {
+                allTasks.value = (await fetchAllPages('/api/garden-tasks', `${base}&${PEOPLE_FIELDS('reserves')}${open}`)).filter(t => t?.garden?.slug);
+                return;
+            } catch (e) {
+                tasksHaveReserves = false;
+            }
+        }
+        allTasks.value = (await fetchAllPages('/api/garden-tasks', `${base}${open}`)).filter(t => t?.garden?.slug);
     } catch (e) {
         allTasks.value = [];
+    }
+}
+
+// The last fortnight of one garden's tasks, any status: the streak, the health
+// badge and "done today" come from this.
+const HISTORY_DAYS = 14;
+const historyBySlug = ref({});
+async function loadHistory(gardenSlug) {
+    if (!gardenSlug) return;
+    const since = new Date(Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    try {
+        const query = `filters[garden][slug][$eq]=${encodeURIComponent(gardenSlug)}`
+            + `&filters[$or][0][createdAt][$gte]=${since}&filters[$or][1][completed_at][$gte]=${since}`
+            + `&${PEOPLE_FIELDS('volunteers')}&populate[recurring_task][fields][0]=id`
+            + '&fields[0]=title&fields[1]=task_status&fields[2]=completed_at&fields[3]=createdAt';
+        const rows = await fetchAllPages('/api/garden-tasks', query);
+        historyBySlug.value = { ...historyBySlug.value, [gardenSlug]: rows };
+    } catch (e) {
+        historyBySlug.value = { ...historyBySlug.value, [gardenSlug]: [] };
     }
 }
 
@@ -605,8 +640,11 @@ function createViewer() {
         : [{ key: 'bare', plant: null }];
     viewer = mount(stageEl.value, { seed: g.slug, plots }, {
         onSelect: (i) => openPanel(i),
-        onDeselect: () => closePanel(false)
+        onDeselect: () => closePanel(false),
+        onFigures: (points) => { figurePoints.value = points; }
     });
+    viewer.setHealth(health.value.level);
+    viewer.setFigures(view.value === 'volunteer' ? islandPeople.value.length : 0);
     observeInset();
 }
 
@@ -736,7 +774,34 @@ const taskStatusTag = (t) => ({ IN_PROGRESS: 'In progress' })[String(t.task_stat
 // Tasks open in place on the sheet: details plus a phone sign-up, no page change.
 const openTaskId = ref(null);
 // Give the server a moment to record the sign-up before refreshing counts, as the task page does.
-const onSignedUp = () => window.setTimeout(loadTasks, 500);
+const refreshGarden = () => Promise.all([loadTasks(), loadHistory(current.value?.slug)]);
+const onSignedUp = () => window.setTimeout(refreshGarden, 500);
+
+// ── Health, people and the figures on the island ──
+const gardenHistory = computed(() => (current.value && historyBySlug.value[current.value.slug]) || []);
+const health = computed(() => computeHealth(gardenHistory.value));
+const visibleTasks = computed(() => gardenTasks.value.filter(ACTIVE_TASK));
+const people = computed(() => (current.value
+    ? volunteersOf({ tasks: visibleTasks.value, history: gardenHistory.value, event: nextEvent.value, userId: user.value?.id ?? null })
+    : []));
+const islandPeople = computed(() => people.value.filter(p => p.onIsland).slice(0, 12));
+const figurePoints = ref([]);
+watch(() => health.value.level, (level) => viewer?.setHealth(level));
+watch([() => islandPeople.value.length, view], ([n, v]) => {
+    viewer?.setFigures(v === 'volunteer' ? n : 0);
+    if (v !== 'volunteer') figurePoints.value = [];
+});
+watch(() => current.value?.slug, (s) => { if (s) loadHistory(s); }, { immediate: true });
+
+// Volunteer actions: each one talks to the server, then the page reloads what changed.
+async function withRefresh(fn, done) {
+    // On failure the store already raised an alert; the page just reloads what it has.
+    await fn().then(refreshGarden, () => null);
+    done?.();
+}
+const onLeave = (task, done) => withRefresh(() => taskStore.leaveTask(task.id), done);
+const onFinish = (task, done) => withRefresh(() => taskStore.finishTask(task.id), done);
+const onLeaveReserve = (task, done) => withRefresh(() => taskStore.leaveReserve(task.id), done);
 
 // ── Sheet sections: Workdays, Volunteer, Plots, each collapsible ──
 // The first one with something in it starts open; after that the visitor's toggles win.
@@ -768,8 +833,22 @@ watch(slug, () => {
 const showRsvpModal = ref(false);
 const rsvpedIds = ref(new Set());
 const rsvpBusy = ref(false);
-const nextEventRsvped = computed(() => !!nextEvent.value && rsvpedIds.value.has(nextEvent.value.id));
+const nextEventRsvped = computed(() => !!nextEvent.value
+    && (rsvpedIds.value.has(nextEvent.value.id) || (!!user.value && (nextEvent.value.confirmed || []).some(c => (c.id ?? c) === user.value.id))));
 const markRsvped = (id) => { rsvpedIds.value = new Set(rsvpedIds.value).add(id); };
+
+async function unrsvpNextEvent() {
+    if (!nextEvent.value || !user.value || rsvpBusy.value) return;
+    rsvpBusy.value = true;
+    const id = nextEvent.value.id;
+    await eventStore.unrsvpEvent(id).then(() => {
+        const next = new Set(rsvpedIds.value);
+        next.delete(id);
+        rsvpedIds.value = next;
+        return loadEvents();
+    }, () => null);
+    rsvpBusy.value = false;
+}
 
 async function rsvpNextEvent() {
     if (!nextEvent.value || nextEventRsvped.value || rsvpBusy.value) return;
@@ -1147,13 +1226,21 @@ const lastSearch = { query: '', status: '', place: null };
                 :next-event="nextEvent"
                 :later-events="laterEvents"
                 :event-count="gardenEvents.length"
-                :tasks="gardenTasks.filter(ACTIVE_TASK)"
+                :tasks="visibleTasks"
+                :health="health"
+                :people="people"
+                :figures="figurePoints"
+                :user="user"
                 :rsvped="nextEventRsvped"
                 :rsvp-busy="rsvpBusy"
                 :can-manage="isManager"
                 @rsvp="rsvpNextEvent"
+                @unrsvp="unrsvpNextEvent"
                 @manage="viewOverride = 'manage'"
                 @signed-up="onSignedUp"
+                @leave="onLeave"
+                @finish="onFinish"
+                @leave-reserve="onLeaveReserve"
             >
                 <template #header>
                     <router-link to="/explore" class="explore-sheet__back">← Map</router-link>
