@@ -118,6 +118,21 @@ describe('layoutSchematic', () => {
     expect(L.beds[0].label).toBe('Basil'); expect(L.beds[0].sub).toBe('Bed 1'); expect(L.beds[0].color).toEqual(BED_COLORS.herb);
     expect(L.beds[1].label).toBe('Kale'); expect(L.beds[1].color).toEqual(BED_COLORS.empty);
   });
+  test('rearranged pieces too shallow for trees do not throw', () => {
+    const shallow = (dx) => ({ ring: [[-10 + dx, -4], [10 + dx, -4], [10 + dx, 4], [-10 + dx, 4]], area_m2: 160 });
+    let L;
+    expect(() => {
+      L = layoutSchematic({ pieces: [shallow(0), shallow(300)], beds: [bed(0, 0), bed(1, 1)], options: {}, stage, seed: 'x' });
+    }).not.toThrow();
+    expect(L.beds).toHaveLength(2);
+    expect(L.trees).toHaveLength(0);
+    const mixed = [SQ, shallow(300), { ring: SQ.ring.map(([x, y]) => [x - 300, y]), area_m2: 400 }];
+    expect(() => {
+      L = layoutSchematic({ pieces: mixed, beds: [bed(0, 0), bed(1, 1), bed(2, 2)], options: {}, stage, seed: 'x' });
+    }).not.toThrow();
+    expect(L.beds).toHaveLength(3);
+    expect(L.trees).toHaveLength(2);
+  });
   test('trees are deterministic for a seed', () => {
     const a = layoutSchematic({ pieces: [SQ], beds: [], options: {}, stage, seed: 'riverside' });
     const b = layoutSchematic({ pieces: [SQ], beds: [], options: {}, stage, seed: 'riverside' });

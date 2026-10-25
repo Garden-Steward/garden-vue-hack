@@ -224,7 +224,7 @@ function shiftPiece(p, dx, dy) {
     ring: p.ring.map(mv),
     placed: p.placed.map((s) => ({ ...s, at: mv(s.at) })),
     pathPoly: p.pathPoly ? p.pathPoly.map(mv) : null,
-    corners: p.corners.map(mv),
+    corners: p.corners ? p.corners.map(mv) : null,
   };
 }
 
