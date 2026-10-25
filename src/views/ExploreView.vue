@@ -28,6 +28,8 @@ import { volunteersOf } from '@/explore/people';
 
 const PLANT_RADIUS_KM = 0.5; // same radius as the garden Plants tab
 const FLY_MS = 900;
+const NEAR_SEARCH_KM = 25; // gardens this close to a searched place share its view
+const PLACE_ZOOM = 13; // a searched place with no garden near it
 const TYPE_LABELS = {
     annual: 'Annual',
     perennial: 'Perennial',
@@ -145,24 +147,32 @@ async function loadTasks() {
     }
 }
 
-// The last fortnight of one garden's tasks, any status: the streak, the health
-// badge and "done today" come from this.
+// The last fortnight of every garden's tasks, any status: the health on the
+// map, the streak card and "done today" all come from this.
 const HISTORY_DAYS = 14;
-const historyBySlug = ref({});
-async function loadHistory(gardenSlug) {
-    if (!gardenSlug) return;
+const recentTasks = ref([]);
+async function loadRecentTasks() {
     const since = new Date(Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString();
     try {
-        const query = `filters[garden][slug][$eq]=${encodeURIComponent(gardenSlug)}`
-            + `&filters[$or][0][createdAt][$gte]=${since}&filters[$or][1][completed_at][$gte]=${since}`
-            + `&${PEOPLE_FIELDS('volunteers')}&populate[recurring_task][fields][0]=id`
+        const query = `filters[$or][0][createdAt][$gte]=${since}&filters[$or][1][completed_at][$gte]=${since}`
+            + `&${PEOPLE_FIELDS('volunteers')}&populate[recurring_task][fields][0]=id&populate[garden][fields][0]=slug`
             + '&fields[0]=title&fields[1]=task_status&fields[2]=completed_at&fields[3]=createdAt';
-        const rows = await fetchAllPages('/api/garden-tasks', query);
-        historyBySlug.value = { ...historyBySlug.value, [gardenSlug]: rows };
+        recentTasks.value = (await fetchAllPages('/api/garden-tasks', query)).filter(t => t?.garden?.slug);
     } catch (e) {
-        historyBySlug.value = { ...historyBySlug.value, [gardenSlug]: [] };
+        recentTasks.value = [];
     }
 }
+/** Per garden slug: computeHealth() over its recent tasks. */
+const healthBySlug = computed(() => {
+    const bySlug = {};
+    for (const t of recentTasks.value) {
+        if (!bySlug[t.garden.slug]) bySlug[t.garden.slug] = [];
+        bySlug[t.garden.slug].push(t);
+    }
+    return Object.fromEntries(Object.entries(bySlug).map(([s, list]) => [s, computeHealth(list)]));
+});
+const healthOf = (slug) => healthBySlug.value[slug] || null;
+const HEALTH_WORD = { thriving: 'Thriving', needs: 'Needs hands' };
 
 const spotsOf = (t) => Math.max(0, (t.max_volunteers || 1) - (Array.isArray(t.volunteers) ? t.volunteers.length : 0));
 
@@ -332,7 +342,9 @@ function cardStatus(g, km) {
             : plantCount(g);
     // Signed out, distances are to the approximate spot, so they read "≈ 0.3 mi".
     const where = km !== null ? `${user.value ? '' : '≈ '}${formatDistance(km)}` : g.onMap ? '' : 'Not on the map';
-    return { text: where ? `${where} · ${text}` : text, help: a.openSpots > 0 };
+    const level = healthOf(g.slug)?.level;
+    const mood = level === 'thriving' ? '🔥 ' : level === 'needs' ? '🌧 ' : '';
+    return { text: `${mood}${where ? `${where} · ${text}` : text}`, help: a.openSpots > 0 };
 }
 
 // ── Full-bleed frame: the page escapes the app's centred container ──
@@ -490,13 +502,23 @@ function createMap() {
     showPlace();
 }
 
-/** Island marker: the island, its name, and a yellow dot while volunteers are needed. Numbers live on the card and the island. */
+/**
+ * Island marker: the island, its name, a yellow dot while volunteers are needed,
+ * and the weather of its health: flames around a thriving island, a drizzle
+ * over one that's short of hands. Numbers live on the card and the island.
+ */
 function isleIcon(g, i) {
     const help = activityOf(g.slug).openSpots ? '<span class="explore-isle__dot" aria-hidden="true"></span>' : '';
+    const level = healthOf(g.slug)?.level;
+    const weather = level === 'thriving'
+        ? '<span class="explore-isle__fire" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>'
+        : level === 'needs'
+            ? '<span class="explore-isle__rain" aria-hidden="true"><b></b><i></i><i></i><i></i><i></i><i></i></span>'
+            : '';
     return L.divIcon({
         className: 'explore-isle',
         // Stagger the bob so neighbouring islands don't move in lockstep.
-        html: `<span class="explore-isle__float" style="animation-delay:${-(i * 0.7) % 4}s">${ISLE_SVG}${help}</span><span class="explore-isle__label">${escapeHtml(g.title)}</span>`,
+        html: `<span class="explore-isle__float${level ? ` is-${level}` : ''}" style="animation-delay:${-(i * 0.7) % 4}s">${weather}${ISLE_SVG}${help}</span><span class="explore-isle__label">${escapeHtml(g.title)}</span>`,
         iconSize: [52, 48],
         iconAnchor: [26, 40]
     });
@@ -507,11 +529,15 @@ function describeGarden(g) {
     const entry = gardenLayers.get(g.slug);
     if (!entry) return;
     const help = volunteerText(g.slug);
+    const level = healthOf(g.slug)?.level;
+    const mood = HEALTH_WORD[level] || '';
     if (entry.layer instanceof L.Marker) {
-        entry.layer.getElement()?.setAttribute('aria-label', [g.title, plantCount(g), hostLine(g), help].filter(Boolean).join(', '));
+        entry.layer.getElement()?.setAttribute('aria-label', [g.title, mood, plantCount(g), hostLine(g), help].filter(Boolean).join(', '));
     } else {
+        // Signed-out areas can't carry the weather, so the label says it in words.
+        const badge = mood ? ` <span class="explore-area-label__mood is-${level}">${level === 'thriving' ? '🔥' : '🌧'} ${mood}</span>` : '';
         entry.layer.setTooltipContent(
-            `${escapeHtml(g.title)}${help ? `<br><span class="explore-area-label__help">${escapeHtml(help)}</span>` : ''}`
+            `${escapeHtml(g.title)}${badge}${help ? `<br><span class="explore-area-label__help">${escapeHtml(help)}</span>` : ''}`
         );
     }
 }
@@ -520,8 +546,8 @@ watch(hostsBySlug, () => {
     for (const { g } of gardenLayers.values()) describeGarden(g);
 });
 
-// Events and tasks arrive after the map is drawn; refresh badges in place so the view doesn't jump.
-watch(activity, () => {
+// Events, tasks and health arrive after the map is drawn; refresh badges in place so the view doesn't jump.
+watch([activity, healthBySlug], () => {
     for (const { layer, g, i } of gardenLayers.values()) {
         if (layer instanceof L.Marker) {
             layer.setIcon(isleIcon(g, i));
@@ -553,8 +579,14 @@ function showPlace() {
         zIndexOffset: -100,
         icon: L.divIcon({ className: 'explore-place-pin', iconSize: [18, 18], iconAnchor: [9, 9] })
     }).addTo(map);
-    const points = [[p.lat, p.lng], ...cards.value.filter(({ g }) => g.onMap).slice(0, 5).map(({ g }) => [g.lat, g.lng])];
-    map.fitBounds(L.latLngBounds(points), { ...framePadding(), maxZoom: 15 });
+    // Zoom to the searched area: the place and the gardens close to it. Far-off
+    // gardens stay in the strip (sorted by distance) but don't drag the map out.
+    const near = cards.value
+        .filter(({ g, km }) => g.onMap && km !== null && km <= NEAR_SEARCH_KM)
+        .map(({ g }) => [g.lat, g.lng]);
+    const animate = !reducedMotion();
+    if (near.length) map.flyToBounds(L.latLngBounds([[p.lat, p.lng], ...near]), { ...framePadding(), maxZoom: 15, animate, duration: 0.9 });
+    else map.flyTo([p.lat, p.lng], PLACE_ZOOM, { animate, duration: 0.9 });
 }
 
 function destroyMap() {
@@ -774,12 +806,12 @@ const taskStatusTag = (t) => ({ IN_PROGRESS: 'In progress' })[String(t.task_stat
 // Tasks open in place on the sheet: details plus a phone sign-up, no page change.
 const openTaskId = ref(null);
 // Give the server a moment to record the sign-up before refreshing counts, as the task page does.
-const refreshGarden = () => Promise.all([loadTasks(), loadHistory(current.value?.slug)]);
+const refreshGarden = () => Promise.all([loadTasks(), loadRecentTasks()]);
 const onSignedUp = () => window.setTimeout(refreshGarden, 500);
 
 // ── Health, people and the figures on the island ──
-const gardenHistory = computed(() => (current.value && historyBySlug.value[current.value.slug]) || []);
-const health = computed(() => computeHealth(gardenHistory.value));
+const gardenHistory = computed(() => (current.value ? recentTasks.value.filter(t => t.garden.slug === current.value.slug) : []));
+const health = computed(() => healthOf(current.value?.slug) || computeHealth([]));
 const visibleTasks = computed(() => gardenTasks.value.filter(ACTIVE_TASK));
 const people = computed(() => (current.value
     ? volunteersOf({ tasks: visibleTasks.value, history: gardenHistory.value, event: nextEvent.value, userId: user.value?.id ?? null })
@@ -791,7 +823,6 @@ watch([() => islandPeople.value.length, view], ([n, v]) => {
     viewer?.setFigures(v === 'volunteer' ? n : 0);
     if (v !== 'volunteer') figurePoints.value = [];
 });
-watch(() => current.value?.slug, (s) => { if (s) loadHistory(s); }, { immediate: true });
 
 // Volunteer actions: each one talks to the server, then the page reloads what changed.
 async function withRefresh(fn, done) {
@@ -897,6 +928,7 @@ onMounted(() => {
     loadTrackings();
     loadEvents();
     loadTasks();
+    loadRecentTasks();
 });
 
 onBeforeUnmount(() => {
@@ -2264,6 +2296,94 @@ const lastSearch = { query: '', status: '', place: null };
     border-radius: 50%;
     background: #f5b700;
     box-shadow: 0 0 0 2px #fbfcf8;
+}
+/* Thriving: flames lick up around the island. Flicker only; the island itself stays readable. */
+.explore-isle__fire {
+    position: absolute;
+    left: 2px;
+    right: 2px;
+    top: -4px;
+    height: 30px;
+    pointer-events: none;
+    z-index: -1;
+}
+.explore-isle__fire i {
+    position: absolute;
+    bottom: 0;
+    width: 12px;
+    height: 22px;
+    border-radius: 50% 50% 45% 45% / 70% 70% 30% 30%;
+    background: linear-gradient(180deg, #ffe066 0%, #ff9a1f 45%, #e2441f 100%);
+    box-shadow: 0 0 6px rgb(255 154 31 / 0.6);
+    transform-origin: 50% 100%;
+    animation: ex-flame 0.9s ease-in-out infinite alternate;
+}
+.explore-isle__fire i:nth-child(1) { left: 0; height: 16px; animation-delay: -0.1s; }
+.explore-isle__fire i:nth-child(2) { left: 10px; height: 24px; animation-delay: -0.5s; }
+.explore-isle__fire i:nth-child(3) { left: 20px; height: 18px; animation-delay: -0.3s; }
+.explore-isle__fire i:nth-child(4) { left: 30px; height: 26px; animation-delay: -0.7s; }
+.explore-isle__fire i:nth-child(5) { left: 38px; height: 15px; animation-delay: -0.2s; }
+@keyframes ex-flame {
+    from { transform: scaleY(0.85) scaleX(1) rotate(-3deg); opacity: 0.85; }
+    to { transform: scaleY(1.15) scaleX(0.9) rotate(3deg); opacity: 1; }
+}
+/* Needs hands: a small grey cloud and a disappointing drizzle; the island goes a little grey too. */
+.explore-isle__float.is-needs svg {
+    filter: saturate(0.55) brightness(0.92);
+}
+.explore-isle__rain {
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    top: -14px;
+    height: 44px;
+    pointer-events: none;
+}
+.explore-isle__rain b {
+    position: absolute;
+    left: 8px;
+    top: 0;
+    width: 28px;
+    height: 11px;
+    border-radius: 999px;
+    background: #9aa4ab;
+    box-shadow: 8px -4px 0 -1px #9aa4ab, -4px -3px 0 -2px #9aa4ab;
+}
+.explore-isle__rain i {
+    position: absolute;
+    top: 12px;
+    width: 2px;
+    height: 7px;
+    border-radius: 1px;
+    background: #6f8fa6;
+    opacity: 0;
+    animation: ex-drizzle 1.1s linear infinite;
+}
+.explore-isle__rain i:nth-child(2) { left: 9px; animation-delay: 0s; }
+.explore-isle__rain i:nth-child(3) { left: 16px; animation-delay: -0.4s; }
+.explore-isle__rain i:nth-child(4) { left: 23px; animation-delay: -0.8s; }
+.explore-isle__rain i:nth-child(5) { left: 30px; animation-delay: -0.2s; }
+.explore-isle__rain i:nth-child(6) { left: 37px; animation-delay: -0.6s; }
+@keyframes ex-drizzle {
+    0% { transform: translateY(0); opacity: 0; }
+    15% { opacity: 0.8; }
+    100% { transform: translateY(26px); opacity: 0; }
+}
+.leaflet-tooltip .explore-area-label__mood {
+    margin-left: 4px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+}
+.leaflet-tooltip .explore-area-label__mood.is-thriving { background: rgb(255 154 31 / 0.18); color: #b4500f; }
+.leaflet-tooltip .explore-area-label__mood.is-needs { background: rgb(111 143 166 / 0.18); color: #3f5a6d; }
+@media (prefers-reduced-motion: reduce) {
+    .explore-isle__fire i,
+    .explore-isle__rain i {
+        animation: none;
+        opacity: 0.8;
+    }
 }
 .explore-isle__label {
     position: absolute;
