@@ -4,6 +4,7 @@ import ExploreTaskSignup from '@/explore/ExploreTaskSignup.vue';
 import { helpSummary, isFull, laterLine, nextSheetHeight, spotsLine } from '@/explore/volunteer';
 import { LEVEL_LABEL, healthNudge } from '@/explore/health';
 import { STATUS_LABEL, myStanding, personInitials, personName, reservePosition } from '@/explore/people';
+import { POTENCY_LABEL } from '@/explore/benefits';
 
 // The Explore garden page for visitors and volunteers: the next workday, the
 // garden's health, who's committed, and the open tasks sit on top of the
@@ -23,6 +24,8 @@ const props = defineProps({
     health: { type: Object, default: null },
     /** From volunteersOf(): everyone committed, with statuses. */
     people: { type: Array, default: () => [] },
+    /** From aggregateBenefits(): what the garden's plants give, most widespread first. */
+    benefits: { type: Array, default: () => [] },
     /** Screen positions for the people standing on the island, in canvas px, same order as `islandPeople`. */
     figures: { type: Array, default: () => [] },
     user: { type: Object, default: null },
@@ -212,6 +215,19 @@ defineExpose({ insetEl: trayEl, sheet });
                 <b>{{ islandPeople.length + extraOnIsland }} on the island</b>
             </div>
         </section>
+
+        <!-- What the garden gives -->
+        <section v-if="benefits.length" class="exv__card exv__benefits" aria-label="What this garden gives" data-test="benefits">
+            <p class="exv__label">What this garden gives</p>
+            <ul class="exv__blist">
+                <li v-for="b in benefits.slice(0, 6)" :key="b.key" :title="`${b.plants.join(', ')} · ${POTENCY_LABEL[b.dots]}`">
+                    <span class="exv__bdots" aria-hidden="true"><i v-for="i in 5" :key="i" :class="{ 'is-on': i <= b.dots }"></i></span>
+                    <span class="exv__btitle">{{ b.title }}</span>
+                    <span class="exv__bcount">{{ b.count }} {{ b.count === 1 ? 'plant' : 'plants' }}</span>
+                </li>
+            </ul>
+            <p v-if="benefits.length > 6" class="exv__meta">and {{ benefits.length - 6 }} more</p>
+        </section>
         </div>
 
         <div class="exv__col exv__col--right">
@@ -267,7 +283,7 @@ defineExpose({ insetEl: trayEl, sheet });
         </div>
 
         <!-- Help needed: tray on desktop, bottom sheet on phone -->
-        <section v-if="tasks.length || (phone && people.length)" ref="trayEl" class="exv__card exv__help" aria-label="Help needed" data-test="help">
+        <section v-if="tasks.length || (phone && (people.length || benefits.length))" ref="trayEl" class="exv__card exv__help" aria-label="Help needed" data-test="help">
             <button
                 type="button"
                 class="exv__grab"
@@ -286,13 +302,23 @@ defineExpose({ insetEl: trayEl, sheet });
                 <button type="button" class="exv__show" data-test="toggle" @click="toggleSheet">{{ sheet === 'peek' ? 'Show ▴' : 'Hide ▾' }}</button>
             </div>
 
-            <div v-if="phone && people.length" class="exv__tabs" role="tablist">
+            <div v-if="phone && (people.length || benefits.length)" class="exv__tabs" role="tablist">
                 <button type="button" role="tab" :aria-selected="tab === 'tasks'" :class="{ 'is-on': tab === 'tasks' }" @click="tab = 'tasks'">Tasks · {{ tasks.length }}</button>
-                <button type="button" role="tab" :aria-selected="tab === 'people'" :class="{ 'is-on': tab === 'people' }" data-test="people-tab" @click="tab = 'people'">People · {{ people.length }}</button>
+                <button v-if="people.length" type="button" role="tab" :aria-selected="tab === 'people'" :class="{ 'is-on': tab === 'people' }" data-test="people-tab" @click="tab = 'people'">People · {{ people.length }}</button>
+                <button v-if="benefits.length" type="button" role="tab" :aria-selected="tab === 'garden'" :class="{ 'is-on': tab === 'garden' }" data-test="garden-tab" @click="tab = 'garden'">Plants · {{ benefits.length }}</button>
             </div>
 
+            <!-- Plants tab (phone): what the garden gives -->
+            <ul v-if="phone && tab === 'garden'" class="exv__blist exv__blist--sheet" data-test="benefits">
+                <li v-for="b in benefits" :key="b.key">
+                    <span class="exv__bdots" aria-hidden="true"><i v-for="i in 5" :key="i" :class="{ 'is-on': i <= b.dots }"></i></span>
+                    <span class="exv__btitle">{{ b.title }}<small>{{ b.plants.join(', ') }}</small></span>
+                    <span class="exv__bcount">{{ b.count }} {{ b.count === 1 ? 'plant' : 'plants' }}</span>
+                </li>
+            </ul>
+
             <!-- People tab (phone) -->
-            <ul v-if="phone && tab === 'people'" class="exv__plist exv__plist--sheet" data-test="people">
+            <ul v-else-if="phone && tab === 'people'" class="exv__plist exv__plist--sheet" data-test="people">
                 <li v-for="p in people" :key="p.id" :data-person="p.id" class="exv__person" :class="{ 'is-me': p.me, 'is-focus': focusPerson === p.id }">
                     <span class="exv__face exv__face--lg">{{ p.initials }}</span>
                     <span class="exv__person-text">
@@ -481,8 +507,13 @@ defineExpose({ insetEl: trayEl, sheet });
     display: grid;
     align-content: start;
     gap: 8px;
+    /* Taller than the room above the tray: the column scrolls (wheel over a card), gaps still reach the island. */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
     pointer-events: none;
 }
+.exv__col::-webkit-scrollbar { display: none; }
 .exv__col--left { left: var(--ex-gutter); }
 .exv__col--right { right: var(--ex-gutter); }
 .exv__col .exv__card { position: relative; min-width: 0; }
@@ -552,6 +583,17 @@ defineExpose({ insetEl: trayEl, sheet });
 .exv__legend i.is-done { border-color: var(--exv-good); background: var(--exv-good); }
 .exv__legend i.is-me { border-color: #fff; box-shadow: 0 0 0 2px rgb(255 255 255 / 0.4); }
 .exv__legend b { color: var(--ex-fg); }
+
+/* What the garden gives */
+.exv__benefits { display: grid; gap: 6px; padding: 12px 14px; }
+.exv__blist { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.exv__blist li { display: flex; align-items: center; gap: 8px; margin: 0; padding: 4px 8px; border-radius: 10px; background: var(--ex-sunken); font-size: var(--ex-t-meta); list-style: none; }
+.exv__bdots { display: inline-flex; gap: 3px; flex: none; }
+.exv__bdots i { width: 7px; height: 7px; border-radius: 50%; background: var(--ex-line); }
+.exv__bdots i.is-on { background: var(--ex-accent); }
+.exv__btitle { flex: 1; min-width: 0; font-weight: 600; }
+.exv__btitle small { display: block; font-weight: 500; font-size: 11px; color: var(--ex-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.exv__bcount { flex: none; color: var(--ex-muted); }
 
 /* Next workday card */
 .exv__next {
@@ -762,7 +804,9 @@ defineExpose({ insetEl: trayEl, sheet });
     .exv__header :deep(h2) { font-size: 15px; }
     .exv__header :deep(.explore-sheet__blurb) { display: none; }
     .exv__header-health { display: block; }
-    .exv__health, .exv__people { display: none; }
+    .exv__health, .exv__people, .exv__benefits { display: none; }
+    .exv.is-peek .exv__blist--sheet { display: none; }
+    .exv__blist--sheet li { min-height: 52px; padding: 8px; font-size: 14px; }
     .exv__next { top: auto; bottom: 118px; left: var(--ex-gutter); right: var(--ex-gutter); width: auto; padding: 10px 12px; }
     .exv:not(.has-tasks) .exv__next { bottom: var(--ex-gutter); }
     .exv__next-row { grid-template-columns: 1fr auto; align-items: center; }

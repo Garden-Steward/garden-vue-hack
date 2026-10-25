@@ -21,6 +21,7 @@ import { repeatSummary } from '@/explore/repeat';
 import { pickView } from '@/explore/volunteer';
 import { computeHealth } from '@/explore/health';
 import { volunteersOf } from '@/explore/people';
+import { aggregateBenefits, POTENCY_LABEL } from '@/explore/benefits';
 
 // Explore: find a garden on the map, then walk around it as a floating
 // low-poly island where each plot grows one of the plants logged nearby.
@@ -101,7 +102,7 @@ async function loadGardens() {
 
 async function loadTrackings() {
     try {
-        trackings.value = await fetchAllPages('/api/location-trackings', 'populate[plant][populate][0]=clipart&populate[plant][populate][1]=images');
+        trackings.value = await fetchAllPages('/api/location-trackings', 'populate[plant][populate][0]=clipart&populate[plant][populate][1]=images&populate[plant][populate][2]=Benefits');
     } catch (e) {
         trackingsError.value = true;
         trackings.value = [];
@@ -642,6 +643,9 @@ const islandPlots = computed(() => {
     }
     return current.value.plants.map(p => ({ key: p.key, label: null, plant: p.plant, count: p.count }));
 });
+// What the garden gives: its plants' benefits added up, one row per benefit.
+const gardenBenefits = computed(() => aggregateBenefits(islandPlots.value.map(p => p.plant)));
+const plantBenefits = (plant) => aggregateBenefits([plant]);
 
 // The editor emits { plots, schematic }; the island only needs the plots.
 function onPlotsSaved(payload) {
@@ -1237,6 +1241,16 @@ const lastSearch = { query: '', status: '', place: null };
                                         </button>
                                     </li>
                                 </ul>
+                                <div v-if="gardenBenefits.length" class="explore-benefits" data-test="benefits">
+                                    <p class="explore-benefits__label">What these plants give</p>
+                                    <ul>
+                                        <li v-for="b in gardenBenefits" :key="b.key" :title="`${b.plants.join(', ')} · ${POTENCY_LABEL[b.dots]}`">
+                                            <span class="explore-benefits__dots" aria-hidden="true"><i v-for="i in 5" :key="i" :class="{ 'is-on': i <= b.dots }"></i></span>
+                                            <span class="explore-benefits__title">{{ b.title }}</span>
+                                            <span class="explore-benefits__count">{{ b.count }} {{ b.count === 1 ? 'plant' : 'plants' }}</span>
+                                        </li>
+                                    </ul>
+                                </div>
                                 <p v-if="trackingsError && !plotsSaved" class="explore-sheet__empty">Some plants couldn't be loaded.</p>
                             </template>
                         </div>
@@ -1260,6 +1274,7 @@ const lastSearch = { query: '', status: '', place: null };
                 :event-count="gardenEvents.length"
                 :tasks="visibleTasks"
                 :health="health"
+                :benefits="gardenBenefits"
                 :people="people"
                 :figures="figurePoints"
                 :user="user"
@@ -1315,6 +1330,16 @@ const lastSearch = { query: '', status: '', place: null };
                             <template v-if="selectedPlant.sun_detail"><dt>Sun</dt><dd>{{ selectedPlant.sun_detail }}</dd></template>
                             <template v-if="selectedPlant.water_detail"><dt>Water</dt><dd>{{ selectedPlant.water_detail }}</dd></template>
                         </dl>
+                        <div v-if="plantBenefits(selectedPlant).length" class="explore-benefits explore-benefits--panel">
+                            <p class="explore-benefits__label">Benefits</p>
+                            <ul>
+                                <li v-for="b in plantBenefits(selectedPlant)" :key="b.key">
+                                    <span class="explore-benefits__dots" aria-hidden="true"><i v-for="i in 5" :key="i" :class="{ 'is-on': i <= b.dots }"></i></span>
+                                    <span class="explore-benefits__title">{{ b.title }}</span>
+                                    <span class="explore-benefits__count">{{ POTENCY_LABEL[b.dots] }}</span>
+                                </li>
+                            </ul>
+                        </div>
                         <router-link v-if="selectedPlant.slug" :to="`/plants/${selectedPlant.slug}`" class="explore-link">
                             More about this plant →
                         </router-link>
@@ -1958,6 +1983,65 @@ const lastSearch = { query: '', status: '', place: null };
     margin-right: 8px;
     font-size: var(--ex-t-meta);
     font-weight: 700;
+    color: var(--ex-muted);
+}
+
+/* Benefits added up across the garden's plants (and one plant's own, in its panel) */
+.explore-benefits {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--ex-line);
+}
+.explore-benefits--panel {
+    margin-top: 4px;
+}
+.explore-benefits__label {
+    margin: 0 0 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ex-muted);
+}
+.explore-benefits ul {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.explore-benefits li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 4px 8px;
+    border-radius: 10px;
+    background: var(--ex-sunken);
+    font-size: var(--ex-t-meta);
+    list-style: none;
+}
+.explore-benefits__dots {
+    display: inline-flex;
+    gap: 3px;
+    flex: none;
+}
+.explore-benefits__dots i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ex-line);
+}
+.explore-benefits__dots i.is-on {
+    background: var(--ex-accent);
+}
+.explore-benefits__title {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+}
+.explore-benefits__count {
+    flex: none;
     color: var(--ex-muted);
 }
 
