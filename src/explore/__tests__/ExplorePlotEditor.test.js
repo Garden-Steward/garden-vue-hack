@@ -34,6 +34,40 @@ describe('ExplorePlotEditor', () => {
         expect(two.find('[data-test="piece"]').exists()).toBe(true);
     });
 
+    const saveAndRead = async (w) => {
+        await w.find('[data-test="save"]').trigger('click');
+        await flushPromises();
+        return w.emitted('saved')[0][0];
+    };
+
+    test('knob values are emitted as typed values', async () => {
+        const w = mount(ExplorePlotEditor, { props: { gardenSlug: null, plots: [{ label: 'A', plant: null }] } });
+        await w.find('[data-test="rows"]').setValue('3');
+        await w.find('[data-test="path"]').setValue('right');
+        await w.find('[data-test="trees"]').setValue('4');
+        expect((await saveAndRead(w)).schematic).toEqual({ rows: 3, path: 'right', trees: 4 });
+    });
+
+    test('rows set back to Auto emits null', async () => {
+        const w = mount(ExplorePlotEditor, { props: { gardenSlug: null, plots: [{ label: 'A', plant: null }] } });
+        await w.find('[data-test="rows"]').setValue('3');
+        await w.find('[data-test="rows"]').setValue('');
+        expect((await saveAndRead(w)).schematic.rows).toBeNull();
+    });
+
+    test('piece select emits a numeric index', async () => {
+        const w = mount(ExplorePlotEditor, { props: { gardenSlug: null, plots: [{ label: 'A', plant: null }], pieces: ['One', 'Two'] } });
+        await w.find('[data-test="piece"]').setValue('1');
+        expect((await saveAndRead(w)).plots[0].piece).toBe(1);
+    });
+
+    test('an out-of-range incoming piece is clamped to 0', async () => {
+        const w = mount(ExplorePlotEditor, {
+            props: { gardenSlug: null, plots: [{ label: 'A', plant: null, piece: 7 }], pieces: ['One', 'Two'] }
+        });
+        expect((await saveAndRead(w)).plots[0].piece).toBe(0);
+    });
+
     test('with a slug, save PUTs plots with piece and schematic', async () => {
         const w = mount(ExplorePlotEditor, {
             props: { gardenSlug: 'g', plots: [{ label: 'A', plant: { documentId: 'p1', title: 'P' }, piece: 1 }], pieces: ['One', 'Two'] }
