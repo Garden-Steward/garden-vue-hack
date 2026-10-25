@@ -20,7 +20,9 @@ const props = defineProps({
     /** Names of the footprint's pieces; the per-bed piece picker shows when there is more than one. */
     pieces: { type: Array, default: () => [] },
     /** Layout knobs { rows, path, trees }; any missing field takes its default. */
-    schematic: { type: Object, default: null }
+    schematic: { type: Object, default: null },
+    /** Show the Layout row (rows / path / trees). Off where the picture does not use them (the Explore island). */
+    layoutKnobs: { type: Boolean, default: true }
 });
 const emit = defineEmits(['saved', 'cancel']);
 
@@ -293,7 +295,7 @@ onBeforeUnmount(close);
 
         <button v-if="rows.length < MAX_PLOTS" type="button" class="ex-plots__add" @click="addPlot">+ Add plot</button>
 
-        <div class="ex-plots__layout">
+        <div v-if="layoutKnobs" class="ex-plots__layout">
             <span class="ex-plots__layout-title">Layout</span>
             <label>Rows
                 <select data-test="rows" :value="schematicState.rows ?? ''" @change="setRows">
