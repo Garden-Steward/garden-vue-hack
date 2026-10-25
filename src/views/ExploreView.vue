@@ -9,8 +9,7 @@ import { fetchWrapper } from '@/helpers';
 import { RsvpPhoneModal } from '@/components/modals';
 import { approximateCenter, APPROX_AREA_RADIUS_M } from '@/helpers/location-privacy';
 import { distanceKm, formatDistance, geocode, nearest, searchArea } from '@/explore/geo';
-import { mount } from '@/explore/viewer/mount';
-import { archetypeOf } from '@/explore/viewer/plants';
+import Schematic from '@/explore/schematic/Schematic.vue';
 import LoadingSpinner from '@/components/LoadingSpinner.vue';
 import ExploreEventForm from '@/explore/ExploreEventForm.vue';
 import ExploreTaskForm from '@/explore/ExploreTaskForm.vue';
@@ -175,7 +174,8 @@ const exploreGardens = computed(() => {
                 slug: g.slug,
                 title: g.title,
                 blurb: g.blurb,
-                managerIds: (Array.isArray(g.managers) ? g.managers : []).map(m => m.id ?? m)
+                managerIds: (Array.isArray(g.managers) ? g.managers : []).map(m => m.id ?? m),
+                footprintShape: g.footprint_shape ?? null
             };
             if (!Number.isFinite(Number(g.latitude)) || !Number.isFinite(Number(g.longitude)) || g.latitude === null || g.longitude === null) {
                 return { ...base, onMap: false, lat: null, lng: null, plants: [] };
@@ -535,26 +535,23 @@ watch(hot, (next, prev) => {
     markerEls.get(next)?.classList.add('is-hot');
 });
 
-// ── Island ──
-const stageEl = ref(null);
+// ── Schematic ──
 const sheetEl = ref(null);
-const selected = ref(null); // index into islandPlots
+const selected = ref(null); // index into schematicBeds
 const panelCloseBtn = ref(null);
-let viewer = null;
-let sheetObserver = null;
 let returnFocus = null;
 
 // ── Plots ──
 // A garden's managers lay out its plots (GET/PUT /api/gardens/:slug/plots).
-// Until they do, the island grows the plants logged nearby instead.
-const savedPlots = ref({}); // slug → saved plots ([] when none); absent until loaded
+// Until they do, the schematic shows the plants logged nearby instead.
+const savedPlots = ref({}); // slug → { plots, schematic } (plots [] when none); absent until loaded
 const editingPlots = ref(false);
 
 async function loadPlots(gardenSlug) {
-    // A failure (or a backend without plots yet) reads as "no saved layout": the island grows logged plants.
+    // A failure (or a backend without plots yet) reads as "no saved layout": the schematic shows logged plants.
     const res = await fetchWrapper.get(`${import.meta.env.VITE_API_URL}/api/gardens/${gardenSlug}/plots`).catch(() => null);
     const plots = res?.data?.meta?.saved ? res.data.plots || [] : [];
-    savedPlots.value = { ...savedPlots.value, [gardenSlug]: plots };
+    savedPlots.value = { ...savedPlots.value, [gardenSlug]: { plots, schematic: res?.data?.schematic ?? null } };
 }
 
 watch(slug, (s) => {
@@ -563,68 +560,28 @@ watch(slug, (s) => {
 }, { immediate: true });
 
 const plotsReady = computed(() => !!current.value && current.value.slug in savedPlots.value);
-const plotsSaved = computed(() => !!savedPlots.value[current.value?.slug]?.length);
+const plotsSaved = computed(() => !!savedPlots.value[current.value?.slug]?.plots?.length);
 
-/** What the island grows and the sheet lists: [{ key, label, plant (or null), count }]. */
-const islandPlots = computed(() => {
+/** What the schematic draws and the sheet lists: [{ key, label, plant (or null), piece, count }]. */
+const schematicBeds = computed(() => {
     if (!current.value) return [];
     if (plotsSaved.value) {
-        return savedPlots.value[current.value.slug].map((p, i) => ({ key: `plot-${i}`, label: p.label, plant: p.plant, count: 1 }));
+        return savedPlots.value[current.value.slug].plots.map((p, i) => ({ key: `plot-${i}`, label: p.label, plant: p.plant, piece: p.piece ?? 0, count: 1 }));
     }
-    return current.value.plants.map(p => ({ key: p.key, label: null, plant: p.plant, count: p.count }));
+    return current.value.plants.map(p => ({ key: p.key, label: null, plant: p.plant, piece: 0, count: p.count }));
 });
 
-function onPlotsSaved(plots) {
-    savedPlots.value = { ...savedPlots.value, [current.value.slug]: plots };
+// Accepts the editor's current array payload or the { plots, schematic } shape (Task 6 drops the array branch).
+function onPlotsSaved(payload) {
+    const slugNow = current.value.slug;
+    const next = Array.isArray(payload)
+        ? { plots: payload, schematic: savedPlots.value[slugNow]?.schematic ?? null }
+        : payload;
+    savedPlots.value = { ...savedPlots.value, [slugNow]: next };
     editingPlots.value = false;
 }
 
-const selectedPlant = computed(() => selected.value === null ? null : islandPlots.value[selected.value]?.plant ?? null);
-
-// Rebuild the island when its layout changes (plots loaded or saved).
-const plotSignature = computed(() => plotsReady.value
-    ? islandPlots.value.map(p => `${p.key}:${p.plant?.type ?? '-'}`).join('|')
-    : null);
-watch(plotSignature, async () => {
-    if (mode.value !== 'garden') return;
-    await nextTick();
-    createViewer();
-});
-
-function createViewer() {
-    destroyViewer();
-    const g = current.value;
-    if (!g || !stageEl.value || !plotsReady.value) return;
-    // An island needs at least one plot; a garden with nothing planted gets one bare plot.
-    const plots = islandPlots.value.length
-        ? islandPlots.value.map(p => ({ key: p.key, plant: p.plant ? { type: archetypeOf(p.plant.type) } : null }))
-        : [{ key: 'bare', plant: null }];
-    viewer = mount(stageEl.value, { seed: g.slug, plots }, {
-        onSelect: (i) => openPanel(i),
-        onDeselect: () => closePanel(false)
-    });
-    const updateInset = () => {
-        const sheet = sheetEl.value;
-        const stage = stageEl.value;
-        if (!sheet || !stage || !viewer) return;
-        const phone = stage.clientWidth <= 640;
-        viewer.setInset(phone ? { left: 0, bottom: Math.min(sheet.offsetHeight, stage.clientHeight * 0.45) } : { left: sheet.offsetWidth + 24, bottom: 0 });
-    };
-    if (typeof ResizeObserver !== 'undefined') {
-        sheetObserver = new ResizeObserver(updateInset);
-        if (sheetEl.value) sheetObserver.observe(sheetEl.value);
-        sheetObserver.observe(stageEl.value);
-    }
-    updateInset();
-}
-
-function destroyViewer() {
-    sheetObserver?.disconnect();
-    sheetObserver = null;
-    viewer?.destroy();
-    viewer = null;
-    selected.value = null;
-}
+const selectedPlant = computed(() => selected.value === null ? null : schematicBeds.value[selected.value]?.plant ?? null);
 
 function onKey(e) {
     if (e.key === 'Escape' && selected.value !== null) closePanel(true);
@@ -638,10 +595,10 @@ async function openPanel(i, opener) {
     panelCloseBtn.value?.focus({ preventScroll: true });
 }
 
-function closePanel(clearViewer) {
+// Call sites may still pass a legacy flag; `selected` is the single source of truth now, so it is always cleared.
+function closePanel() {
     if (selected.value === null) return;
     selected.value = null;
-    if (clearViewer) viewer?.clearSelection();
     returnFocus?.focus?.();
     returnFocus = null;
 }
@@ -714,7 +671,7 @@ const sheetSections = computed(() => {
     const list = [];
     if (gardenEvents.value.length || isManager.value) list.push({ id: 'workdays', count: gardenEvents.value.length });
     if (gardenTasks.value.length || isManager.value) list.push({ id: 'tasks', count: gardenTasks.value.length });
-    list.push({ id: 'plots', count: islandPlots.value.length });
+    list.push({ id: 'plots', count: schematicBeds.value.length });
     return list;
 });
 const hasSection = (id) => sheetSections.value.some(s => s.id === id);
@@ -754,7 +711,7 @@ async function rsvpNextEvent() {
 
 function pickPlant(i, e) {
     returnFocus = e?.currentTarget ?? null;
-    viewer?.selectPlot(i);
+    selected.value = i;
 }
 
 // ── Lifecycle ──
@@ -767,14 +724,14 @@ const mode = computed(() => {
 watch([mode, slug, user], async () => {
     await nextTick();
     if (mode.value === 'map') {
-        destroyViewer();
+        selected.value = null;
         createMap();
     } else if (mode.value === 'garden') {
+        selected.value = null;
         destroyMap();
-        createViewer();
     } else {
+        selected.value = null;
         destroyMap();
-        destroyViewer();
     }
 }, { flush: 'post' });
 
@@ -793,7 +750,6 @@ onBeforeUnmount(() => {
     document.removeEventListener('keydown', onKey);
     pending?.abort();
     destroyMap();
-    destroyViewer();
 });
 </script>
 
@@ -871,7 +827,17 @@ const lastSearch = { query: '', status: '', place: null };
         </div>
 
         <template v-else-if="mode === 'garden'">
-            <div ref="stageEl" class="explore-island"></div>
+            <div class="explore-stage">
+                <Schematic
+                    :pieces="current.footprintShape?.pieces"
+                    :beds="schematicBeds"
+                    :options="savedPlots[current.slug]?.schematic"
+                    :selected="selected"
+                    :seed="current.slug"
+                    @select="openPanel"
+                    @deselect="closePanel(false)"
+                />
+            </div>
 
             <section ref="sheetEl" class="explore-sheet" aria-labelledby="explore-garden-title">
                 <header class="explore-sheet__header">
@@ -1065,17 +1031,17 @@ const lastSearch = { query: '', status: '', place: null };
                             <ExplorePlotEditor
                                 v-if="editingPlots"
                                 :garden-slug="current.slug"
-                                :plots="plotsSaved ? islandPlots : []"
+                                :plots="plotsSaved ? schematicBeds : []"
                                 :suggestions="current.plants.map(p => p.plant)"
                                 @saved="onPlotsSaved"
                                 @cancel="editingPlots = false"
                             />
                             <template v-else>
-                                <p v-if="!islandPlots.length" class="explore-sheet__empty">
+                                <p v-if="!schematicBeds.length" class="explore-sheet__empty">
                                     No plants have been logged near this garden yet.
                                 </p>
                                 <ul v-else class="explore-sheet__plants">
-                                    <li v-for="(p, i) in islandPlots" :key="p.key">
+                                    <li v-for="(p, i) in schematicBeds" :key="p.key">
                                         <button
                                             type="button"
                                             :class="{ 'is-selected': selected === i }"
@@ -1210,7 +1176,7 @@ const lastSearch = { query: '', status: '', place: null };
 }
 
 .explore-map,
-.explore-island {
+.explore-stage {
     position: absolute;
     inset: 0;
 }
@@ -1513,20 +1479,9 @@ const lastSearch = { query: '', status: '', place: null };
     border-radius: 8px 8px 0 0;
 }
 
-/* ── Island screen ── */
-.explore-island {
-    background: linear-gradient(180deg, #b9d7e4 0%, var(--ex-sky) 55%, #e3efe6 100%);
-    animation: ex-arrive 700ms ease both;
-}
-.explore-island :deep(canvas) {
-    display: block;
-    width: 100%;
-    height: 100%;
-    touch-action: none;
-}
-.explore-island :deep(.webgl-error) {
-    padding: 24px;
-    color: #1c2318;
+/* ── Schematic screen ── */
+.explore-stage {
+    background: #f6f6f0;
 }
 
 .explore-sheet {
@@ -2014,16 +1969,12 @@ const lastSearch = { query: '', status: '', place: null };
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: none; }
 }
-@keyframes ex-arrive {
-    from { opacity: 0; transform: scale(1.04); }
-    to { opacity: 1; transform: none; }
-}
 
 @media (prefers-reduced-motion: reduce) {
     .explore-hud,
     .explore-card,
     .explore-sheet,
-    .explore-island {
+    .explore-stage {
         animation: none;
     }
     .explore-card,
