@@ -58,8 +58,7 @@ export const router = createRouter({
             path: '/map',
             component: MapView
         },
-        // Explore pulls in three.js, so it loads on demand. It fills the
-        // screen under the nav, so there's no footer.
+        // Explore fills the screen under the nav, so there's no footer.
         {
             path: '/explore',
             component: ExploreView,
