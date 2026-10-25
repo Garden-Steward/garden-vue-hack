@@ -16,6 +16,7 @@ import ExploreTaskForm from '@/explore/ExploreTaskForm.vue';
 import ExploreTaskRow from '@/explore/ExploreTaskRow.vue';
 import ExplorePlotEditor from '@/explore/ExplorePlotEditor.vue';
 import { repeatSummary } from '@/explore/repeat';
+import { pieceLetter } from '@/explore/schematic/colors.js';
 
 // Explore: find a garden on the map, then open its flat SVG schematic
 // where each bed shows one of the plants logged nearby.
@@ -572,13 +573,14 @@ const schematicBeds = computed(() => {
     return current.value.plants.map(p => ({ key: p.key, label: null, plant: p.plant, piece: 0, count: p.count }));
 });
 
-// Accepts the editor's current array payload or the { plots, schematic } shape (Task 6 drops the array branch).
-function onPlotsSaved(payload) {
-    const slugNow = current.value.slug;
-    const next = Array.isArray(payload)
-        ? { plots: payload, schematic: savedPlots.value[slugNow]?.schematic ?? null }
-        : payload;
-    savedPlots.value = { ...savedPlots.value, [slugNow]: next };
+/** Piece names for the bed editor: "A", "B", … when the footprint has several, else "Garden". */
+const pieceNames = computed(() => {
+    const list = current.value?.footprintShape?.pieces || [];
+    return list.map((_, i) => pieceLetter(i, list.length) || 'Garden');
+});
+
+function onPlotsSaved({ plots, schematic }) {
+    savedPlots.value = { ...savedPlots.value, [current.value.slug]: { plots, schematic } };
     selected.value = null;
     editingPlots.value = false;
 }
@@ -1031,6 +1033,8 @@ const lastSearch = { query: '', status: '', place: null };
                                 :garden-slug="current.slug"
                                 :plots="plotsSaved ? schematicBeds : []"
                                 :suggestions="current.plants.map(p => p.plant)"
+                                :pieces="pieceNames"
+                                :schematic="savedPlots[current.slug]?.schematic"
                                 @saved="onPlotsSaved"
                                 @cancel="editingPlots = false"
                             />

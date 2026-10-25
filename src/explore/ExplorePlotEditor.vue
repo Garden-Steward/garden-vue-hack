@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
 import { fetchWrapper } from '@/helpers';
 import { useAlertStore } from '@/stores';
 
-// Lay out a garden's plots from the Explore island sheet: name each bed, pick
+// Lay out a garden's plots from the Explore sheet: name each bed, pick
 // its plant, reorder, add and remove. Saves the whole list at once
 // (PUT /api/gardens/:slug/plots), so a half-edited layout never goes live.
 
@@ -11,20 +11,44 @@ const MAX_PLOTS = 64; // the API's limit
 const PAGE = 20; // plants shown in the dropdown at once
 
 const props = defineProps({
-    gardenSlug: { type: String, required: true },
-    /** Current plots, [{ label, plant }], used to start editing. */
+    /** Null means controlled mode: no request, the result is only emitted (the add-garden wizard). */
+    gardenSlug: { type: String, default: null },
+    /** Current plots, [{ label, plant, piece }], used to start editing. */
     plots: { type: Array, default: () => [] },
     /** Plants logged near the garden, offered as a starting layout when there are no plots yet. */
-    suggestions: { type: Array, default: () => [] }
+    suggestions: { type: Array, default: () => [] },
+    /** Names of the footprint's pieces; the per-bed piece picker shows when there is more than one. */
+    pieces: { type: Array, default: () => [] },
+    /** Layout knobs { rows, path, trees }; any missing field takes its default. */
+    schematic: { type: Object, default: null }
 });
 const emit = defineEmits(['saved', 'cancel']);
 
 const api = import.meta.env.VITE_API_URL;
 let nextKey = 0;
 // `text` is what the plant box shows: the chosen plant's name, or what's being typed.
-const row = (label, plant) => ({ key: nextKey++, label: label || '', plant: plant || null, text: plant?.title || '' });
+const row = (label, plant, piece) => ({
+    key: nextKey++,
+    label: label || '',
+    plant: plant || null,
+    text: plant?.title || '',
+    piece: Number.isInteger(piece) && piece >= 0 && piece < props.pieces.length ? piece : 0
+});
 
-const rows = ref(props.plots.map(p => row(p.label, p.plant)));
+const rows = ref(props.plots.map(p => row(p.label, p.plant, p.piece)));
+const schematicState = ref({
+    rows: props.schematic?.rows ?? null,
+    path: props.schematic?.path ?? 'centre',
+    trees: props.schematic?.trees ?? 2
+});
+const PATHS = [
+    ['centre', 'Centre'],
+    ['left', 'Left'],
+    ['right', 'Right'],
+    ['none', 'None']
+];
+const setRows = (e) => { schematicState.value.rows = e.target.value === '' ? null : Number(e.target.value); };
+const setTrees = (e) => { schematicState.value.trees = Number(e.target.value); };
 const saving = ref(false);
 const error = ref('');
 const plantInputs = ref({}); // row key → plant input element
@@ -127,7 +151,7 @@ function onKeydown(r, e) {
 // ── Rows ──
 async function addPlot() {
     if (rows.value.length >= MAX_PLOTS) return;
-    const r = row('', null);
+    const r = row('', null, 0);
     rows.value.push(r);
     await nextTick();
     plantInputs.value[r.key]?.focus();
@@ -147,7 +171,7 @@ function remove(i) {
 }
 
 function startFromSuggestions() {
-    rows.value = props.suggestions.slice(0, MAX_PLOTS).map(p => row('', p));
+    rows.value = props.suggestions.slice(0, MAX_PLOTS).map(p => row('', p, 0));
 }
 
 async function save() {
@@ -156,13 +180,24 @@ async function save() {
         error.value = 'Plot names are 60 characters at most.';
         return;
     }
+    const schematic = { ...schematicState.value };
+    if (!props.gardenSlug) {
+        emit('saved', {
+            plots: rows.value.map(r => ({ label: r.label.trim() || null, plant: r.plant, piece: r.piece })),
+            schematic
+        });
+        return;
+    }
     saving.value = true;
     try {
         const res = await fetchWrapper.put(`${api}/api/gardens/${props.gardenSlug}/plots`, {
-            data: { plots: rows.value.map(r => ({ label: r.label.trim() || null, plant: r.plant?.documentId ?? null })) }
+            data: {
+                plots: rows.value.map(r => ({ label: r.label.trim() || null, plant: r.plant?.documentId ?? null, piece: r.piece })),
+                schematic
+            }
         });
         useAlertStore().success('Plots saved');
-        emit('saved', res?.data?.plots || []);
+        emit('saved', { plots: res?.data?.plots || [], schematic: res?.data?.schematic ?? schematic });
     } catch (e) {
         // fetchWrapper rejects with the API's message, as a string or { message }.
         error.value = (typeof e === 'string' ? e : e?.message) || "Couldn't save the plots. Try again in a moment.";
@@ -179,7 +214,7 @@ onBeforeUnmount(close);
         <p class="ex-plots__title">Edit plots</p>
 
         <div v-if="!rows.length" class="ex-plots__empty">
-            <p>No plots yet. Each plot is one bed on the island, growing one plant.</p>
+            <p>No beds yet. Each plot is one bed in the plan, growing one plant.</p>
             <button v-if="suggestions.length" type="button" class="ex-plots__link" @click="startFromSuggestions">
                 Start from the {{ suggestions.length }} {{ suggestions.length === 1 ? 'plant' : 'plants' }} logged nearby
             </button>
@@ -196,6 +231,14 @@ onBeforeUnmount(close);
                         :placeholder="`Plot ${i + 1}`"
                         :aria-label="`Name of plot ${i + 1}`"
                     />
+                    <select
+                        v-if="pieces.length > 1"
+                        v-model.number="r.piece"
+                        data-test="piece"
+                        :aria-label="`Piece for plot ${i + 1}`"
+                    >
+                        <option v-for="(name, k) in pieces" :key="k" :value="k">{{ name }}</option>
+                    </select>
                     <div class="ex-plots__combo">
                         <input
                             :ref="(el) => { if (el) plantInputs[r.key] = el; else delete plantInputs[r.key]; }"
@@ -250,9 +293,29 @@ onBeforeUnmount(close);
 
         <button v-if="rows.length < MAX_PLOTS" type="button" class="ex-plots__add" @click="addPlot">+ Add plot</button>
 
+        <div class="ex-plots__layout">
+            <span class="ex-plots__layout-title">Layout</span>
+            <label>Rows
+                <select data-test="rows" :value="schematicState.rows ?? ''" @change="setRows">
+                    <option value="">Auto</option>
+                    <option v-for="n in 8" :key="n" :value="n">{{ n }}</option>
+                </select>
+            </label>
+            <label>Path
+                <select v-model="schematicState.path" data-test="path">
+                    <option v-for="[v, l] in PATHS" :key="v" :value="v">{{ l }}</option>
+                </select>
+            </label>
+            <label>Trees
+                <select data-test="trees" :value="schematicState.trees" @change="setTrees">
+                    <option v-for="n in 7" :key="n" :value="n - 1">{{ n - 1 }}</option>
+                </select>
+            </label>
+        </div>
+
         <p v-if="error" class="ex-form__error" role="alert">{{ error }}</p>
         <div class="ex-form__actions">
-            <button type="button" class="ex-form__save" :disabled="saving" @click="save">{{ saving ? 'Saving…' : 'Save plots' }}</button>
+            <button type="button" class="ex-form__save" data-test="save" :disabled="saving" @click="save">{{ saving ? 'Saving…' : 'Save plots' }}</button>
             <button type="button" class="ex-form__cancel" @click="emit('cancel')">Cancel</button>
         </div>
     </div>
@@ -313,6 +376,31 @@ onBeforeUnmount(close);
     min-width: 0;
     display: grid;
     gap: 4px;
+}
+.ex-plots__fields select,
+.ex-plots__layout select {
+    padding: 5px 7px;
+    border: 1px solid var(--ex-line);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ex-fg);
+    font: inherit;
+    font-size: 13px;
+}
+.ex-plots__layout {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    font-size: 13px;
+}
+.ex-plots__layout label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.ex-plots__layout-title {
+    font-weight: 700;
 }
 .ex-plots__fields input {
     width: 100%;
@@ -413,6 +501,7 @@ onBeforeUnmount(close);
     cursor: pointer;
 }
 .ex-plots button:focus-visible,
+.ex-plots select:focus-visible,
 .ex-plots input:focus-visible {
     outline: 3px solid var(--ex-pick);
     outline-offset: 1px;
