@@ -6,6 +6,15 @@ const SQ = { ring: [[-10, -10], [10, -10], [10, 10], [-10, 10]], area_m2: 400 };
 const stage = { width: 800, height: 600 };
 const bed = (i, piece = 0, type = 'annual') => ({ key: `b${i}`, label: `Bed ${i}`, plant: { type, title: 'T' }, piece });
 
+function inside([x, y], poly) {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+
 describe('layoutSchematic', () => {
   test('one piece, four beds: all beds inside the piece, path present, two trees', () => {
     const L = layoutSchematic({ pieces: [SQ], beds: [0, 1, 2, 3].map(i => bed(i)), options: {}, stage, seed: 'x' });
@@ -43,6 +52,49 @@ describe('layoutSchematic', () => {
     const L = layoutSchematic({ pieces: [tiny], beds: Array.from({ length: 64 }, (_, i) => bed(i)), options: {}, stage, seed: 'x' });
     expect(L.beds).toHaveLength(64);
     expect(Math.min(...L.beds.map(b => b.w))).toBeGreaterThanOrEqual(60);
+    expect(L.notToScale).toBe(true);
+    expect(L.size.width).toBeLessThan(5000);
+    expect(L.size.height).toBeLessThan(5000);
+  });
+  test('thin piece stays bounded and keeps beds readable', () => {
+    const thin = { ring: [[-15, -2.5], [15, -2.5], [15, 2.5], [-15, 2.5]], area_m2: 150 };
+    const L = layoutSchematic({ pieces: [thin], beds: [bed(0), bed(1)], options: {}, stage, seed: 'x' });
+    expect(L.size.width).toBeLessThan(5000);
+    expect(L.size.height).toBeLessThan(5000);
+    for (const b of L.beds) expect(b.w).toBeGreaterThanOrEqual(60);
+  });
+  test('rotated ring: every rotated bed corner lies inside the piece polygon', () => {
+    const t = Math.PI / 6;
+    const ring = [[-10, -6], [10, -6], [10, 6], [-10, 6]].map(([x, y]) => [x * Math.cos(t) - y * Math.sin(t), x * Math.sin(t) + y * Math.cos(t)]);
+    const L = layoutSchematic({ pieces: [{ ring, area_m2: 240 }], beds: Array.from({ length: 6 }, (_, i) => bed(i)), options: {}, stage, seed: 'x' });
+    const poly = L.pieces[0].points;
+    for (const b of L.beds) {
+      const r = b.angle * Math.PI / 180;
+      for (const [i, j] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        const lx = i * b.w / 2, ly = j * b.h / 2;
+        const pt = [b.x + lx * Math.cos(r) - ly * Math.sin(r), b.y + lx * Math.sin(r) + ly * Math.cos(r)];
+        expect(inside(pt, poly)).toBe(true);
+      }
+    }
+  });
+  test('default rectangle grows with bed count', () => {
+    const width = (n) => {
+      const L = layoutSchematic({ pieces: [], beds: Array.from({ length: n }, (_, i) => bed(i)), options: {}, stage, seed: 'x' });
+      const xs = L.pieces[0].points.map(p => p[0]);
+      return (Math.max(...xs) - Math.min(...xs)) / L.scale;
+    };
+    expect(width(40)).toBeGreaterThan(width(2));
+  });
+  test('undefined option fields take defaults', () => {
+    const L = layoutSchematic({ pieces: [SQ], beds: [], options: { trees: undefined, path: null, rows: undefined }, stage, seed: 'x' });
+    expect(L.trees).toHaveLength(2);
+    expect(L.paths).toHaveLength(1);
+  });
+  test('many trees over pieces sharing a factor with 4 use distinct spots', () => {
+    const ps = [0, 1, 2, 3].map(k => ({ ring: SQ.ring.map(([x, y]) => [x + k * 40, y]), area_m2: 400 }));
+    const L = layoutSchematic({ pieces: ps, beds: [], options: { trees: 8 }, stage, seed: 'x' });
+    const spots = new Set(L.trees.map(t => `${t.x.toFixed(2)},${t.y.toFixed(2)}`));
+    expect(spots.size).toBe(8);
   });
   test('options: path none, rows 1, trees 0', () => {
     const L = layoutSchematic({ pieces: [SQ], beds: [bed(0)], options: { path: 'none', rows: 1, trees: 0 }, stage, seed: 'x' });

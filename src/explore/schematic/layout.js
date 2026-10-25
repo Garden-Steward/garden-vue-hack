@@ -10,6 +10,9 @@ export const MIN_BED_PX = 60;
 export const DEFAULT_OPTIONS = { rows: null, path: 'centre', trees: 2 };
 
 const TIGHT_GAP = 0.4;
+const MIN_BED_SCALE = 0.25; // beds never shrink below this fraction of BED_W x BED_D
+const SHRINK_STEP = 0.95;
+const MAX_SHRINK_STEPS = 400;
 const PIECE_GAP = 4;
 const EPS = 1e-9;
 
@@ -33,7 +36,12 @@ function validRing(ring) {
 }
 
 function resolveOptions(options) {
-  const o = { ...DEFAULT_OPTIONS, ...(options || {}) };
+  const given = options || {};
+  const o = {
+    rows: given.rows ?? DEFAULT_OPTIONS.rows,
+    path: given.path ?? DEFAULT_OPTIONS.path,
+    trees: given.trees ?? DEFAULT_OPTIONS.trees,
+  };
   const rows = Number.isFinite(o.rows) && o.rows >= 1 ? Math.floor(o.rows) : null;
   const path = ['centre', 'left', 'right', 'none'].includes(o.path) ? o.path : 'centre';
   const trees = Number.isFinite(o.trees) && o.trees > 0 ? Math.floor(o.trees) : 0;
@@ -95,9 +103,15 @@ function orientedBox(ring) {
   };
 }
 
-/** Strips across the short axis (local b range) that hold beds, plus the path strip. */
+/**
+ * Strips across the short axis (local b range) that hold beds, plus the path strip.
+ * 'left' is +v and 'right' is -v when facing along the canonical long axis u.
+ * A piece too shallow for a path plus a minimum-size bed row on each bed side drops its path.
+ */
 function strips(D, pathKind) {
   const h = Math.max(D - 2 * MARGIN, 0.5) / 2;
+  const sides = pathKind === 'centre' ? 2 : 1;
+  if (pathKind !== 'none' && (2 * h - PATH_W) / sides < BED_D * MIN_BED_SCALE) pathKind = 'none';
   switch (pathKind) {
     case 'none': return { blocks: [[-h, h]], path: null };
     case 'left': return { blocks: [[-h, h - PATH_W]], path: [h - PATH_W, h] };
@@ -126,11 +140,14 @@ function planGrid(count, innerL, blocks, rowsOpt) {
   if (plan.capacity >= count) return { ...plan, f: 1 };
   plan = capacityOf(1, TIGHT_GAP, innerL, blocks, rowsOpt);
   if (plan.capacity >= count) return { ...plan, f: 1 };
-  let f = Math.sqrt(Math.max(plan.capacity, 1) / count);
-  for (let i = 0; i < 400; i++) {
-    plan = capacityOf(f, TIGHT_GAP, innerL, blocks, rowsOpt);
-    if (plan.capacity >= count) break;
-    f *= 0.95;
+  // The sqrt estimate ignores the floor() in rows/cols, so it can still be too big;
+  // step down until the grid really holds every bed, but never below MIN_BED_SCALE
+  // (best effort: beds may then overlap rather than shrink without bound).
+  let f = Math.max(Math.sqrt(Math.max(plan.capacity, 1) / count), MIN_BED_SCALE);
+  for (let i = 0; i < MAX_SHRINK_STEPS; i++) {
+    plan = capacityOf(f, TIGHT_GAP * f, innerL, blocks, rowsOpt);
+    if (plan.capacity >= count || f <= MIN_BED_SCALE) break;
+    f = Math.max(f * SHRINK_STEP, MIN_BED_SCALE);
   }
   return { ...plan, f };
 }
@@ -289,7 +306,8 @@ export function layoutSchematic({ pieces, beds, options, stage, seed } = {}) {
   const start = hash(seed) % 4;
   const trees = [];
   for (let i = 0; i < opts.trees; i++) {
-    const [x, y] = toPx(built[i % built.length].corners[(start + i) % 4]);
+    const P = built.length;
+    const [x, y] = toPx(built[i % P].corners[(start + Math.floor(i / P)) % 4]);
     trees.push({ x, y, r: TREE_R * scale });
   }
 
