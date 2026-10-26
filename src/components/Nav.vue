@@ -211,6 +211,7 @@ const handleEscape = (e) => {
                     :class="{ 'mobile-nav-section-active': isGardensNavActive }"
                     @click="toggleMobileMenu"
                 >Gardens</router-link>
+                <router-link to="/explore" class="nav-item nav-link" @click="toggleMobileMenu">Explore</router-link>
                 <router-link to="/projects" class="nav-item nav-link" @click="toggleMobileMenu">Projects</router-link>
                 <router-link
                     to="/manage"
@@ -286,6 +287,7 @@ const handleEscape = (e) => {
                         class="nav-item nav-link"
                         :class="{ 'nav-link--section-active': isGardensNavActive }"
                     >Gardens</router-link>
+                    <router-link to="/explore" class="nav-item nav-link">Explore</router-link>
                     <router-link to="/projects" class="nav-item nav-link">Projects</router-link>
                     <router-link to="/events" class="nav-item nav-link">Events</router-link>
 

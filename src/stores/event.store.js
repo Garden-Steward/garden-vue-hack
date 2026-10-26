@@ -292,6 +292,19 @@ export const useEventStore = defineStore({
                 })
                 .catch(this.handleError);
         },
+        /** "Can't make it": the signed-in user is no longer going. */
+        async unrsvpEvent(id) {
+            return fetchWrapper.delete(`${baseUrl}/rsvp/${id}`)
+                .then(res => {
+                    const confirmed = res?.data?.confirmed;
+                    if (this.event?.id === id && Array.isArray(confirmed)) this.event = { ...this.event, confirmed };
+                    return res;
+                })
+                .catch(error => {
+                    this.handleError(error);
+                    throw error;
+                });
+        },
         async closeUpdate() {
             // const idx = this.volunteerDays.days.findIndex(v=> v.id == id);
             // this.volunteerDays.days[idx].title = this.volunteerDay.title;

@@ -263,6 +263,33 @@ export const useGardenTaskStore = defineStore({
                 })
                 .catch(this.handleError);
         },
+        /** "I can't make it": the signed-in user leaves the task. The first reserve is texted. */
+        async leaveTask(taskId) {
+            return fetchWrapper.post(`${baseUrl}/${taskId}/leave`, {}).catch(error => {
+                useAlertStore().error(error.message || "Couldn't take you off the task");
+                throw error;
+            });
+        },
+        /** Join a full task's reserve list, as yourself or by phone number when signed out. */
+        async joinReserve(taskId, phoneNumber = null) {
+            return fetchWrapper.post(`${baseUrl}/${taskId}/reserve`, { data: phoneNumber ? { phoneNumber } : {} }).catch(error => {
+                useAlertStore().error(error.message || "Couldn't add you to the reserve list");
+                throw error;
+            });
+        },
+        async leaveReserve(taskId) {
+            return fetchWrapper.delete(`${baseUrl}/${taskId}/reserve`).catch(error => {
+                useAlertStore().error(error.message || "Couldn't take you off the reserve list");
+                throw error;
+            });
+        },
+        /** A volunteer on the task marks it done from the page. */
+        async finishTask(taskId) {
+            return fetchWrapper.post(`${baseUrl}/${taskId}/finish`, {}).catch(error => {
+                useAlertStore().error(error.message || "Couldn't mark the task done");
+                throw error;
+            });
+        },
         async assignTaskViaSMS(taskId, phoneNumber) {
             return fetchWrapper.post(`${baseUrl}/rsvp/${taskId}`, {
                 data: {
